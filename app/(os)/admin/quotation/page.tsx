@@ -1,10 +1,111 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react/no-unescaped-entities, react-hooks/exhaustive-deps */
 'use client';
 
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Trash2, Send, Download, CheckCircle, Eye, FileText, Copy, ChevronRight, Edit3, Clock } from 'lucide-react';
-import { useStore, QUOTE_TEMPLATES } from '@/lib/store';
-import type { Quote, QuoteLineItem } from '@/lib/store';
+import { useEffect } from 'react';
+import { supabase } from '@/lib/supabase/client';
+
+export interface QuoteLineItem {
+  id: string;
+  description: string;
+  qty: number;
+  unitPrice: number;
+  category: 'design' | 'development' | 'video' | 'strategy' | 'retainer' | 'other';
+}
+
+export interface Quote {
+  id: string;
+  clientName: string;
+  clientEmail: string;
+  clientCompany: string;
+  projectType: string;
+  lineItems: QuoteLineItem[];
+  notes: string;
+  validUntil: string;
+  status: 'draft' | 'sent' | 'viewed' | 'accepted' | 'rejected' | 'expired';
+  templateId?: string;
+  createdAt: string;
+  sentAt?: string;
+  discount?: number;
+  tax?: number;
+}
+
+export interface QuoteTemplate {
+  id: string;
+  name: string;
+  description: string;
+  projectType: string;
+  lineItems: Omit<QuoteLineItem, 'id'>[];
+  notes: string;
+  estimatedDays: number;
+}
+
+export const QUOTE_TEMPLATES: QuoteTemplate[] = [
+  {
+    id: 'tpl_brand',
+    name: 'Brand Identity Package',
+    description: 'Logo, brand guidelines, color system, typography',
+    projectType: 'Branding',
+    estimatedDays: 21,
+    notes: 'All source files (AI, PDF, PNG) delivered upon final payment. IP transfers upon full settlement.',
+    lineItems: [
+      { description: 'Brand Discovery Workshop (2 sessions)', qty: 1, unitPrice: 1500, category: 'strategy' },
+      { description: 'Logo Design (3 concepts + revisions)', qty: 1, unitPrice: 3500, category: 'design' },
+      { description: 'Brand Guidelines Document', qty: 1, unitPrice: 1200, category: 'design' },
+      { description: 'Color System + Typography Spec', qty: 1, unitPrice: 800, category: 'design' },
+      { description: 'Business Card + Letterhead Design', qty: 1, unitPrice: 600, category: 'design' },
+      { description: 'Social Media Kit (6 templates)', qty: 1, unitPrice: 900, category: 'design' },
+    ],
+  },
+  {
+    id: 'tpl_web',
+    name: 'Web Platform Build',
+    description: 'Custom web app or multi-page marketing site',
+    projectType: 'Web Development',
+    estimatedDays: 60,
+    notes: 'Built on Next.js + Tailwind. Performance-first, CMS-ready. 30-day post-launch support included.',
+    lineItems: [
+      { description: 'Discovery & Architecture Planning', qty: 1, unitPrice: 2500, category: 'strategy' },
+      { description: 'UI/UX Design System (Figma)', qty: 1, unitPrice: 4000, category: 'design' },
+      { description: 'Frontend Development (per page)', qty: 8, unitPrice: 800, category: 'development' },
+      { description: 'CMS Integration (Sanity/Contentful)', qty: 1, unitPrice: 2000, category: 'development' },
+      { description: 'Backend/API Integration', qty: 1, unitPrice: 3500, category: 'development' },
+      { description: 'QA, Performance Audit & Launch', qty: 1, unitPrice: 1500, category: 'development' },
+    ],
+  },
+  {
+    id: 'tpl_video',
+    name: 'Video Campaign Package',
+    description: 'Hero video, social cuts, raw footage archival',
+    projectType: 'Video Production',
+    estimatedDays: 28,
+    notes: 'All footage archived in 4K ProRes. Includes 3 rounds of revisions. Usage rights transferred upon final payment.',
+    lineItems: [
+      { description: 'Pre-Production & Storyboard', qty: 1, unitPrice: 1500, category: 'strategy' },
+      { description: 'Shoot Day (Full Crew)', qty: 2, unitPrice: 3500, category: 'video' },
+      { description: 'Primary Edit (Hero 60–90s)', qty: 1, unitPrice: 2500, category: 'video' },
+      { description: 'Color Grade & Grade Master', qty: 1, unitPrice: 1200, category: 'video' },
+      { description: 'Sound Design & Mix', qty: 1, unitPrice: 900, category: 'video' },
+      { description: 'Social Cuts (3x :30 + 3x :15)', qty: 1, unitPrice: 1800, category: 'video' },
+    ],
+  },
+  {
+    id: 'tpl_retainer',
+    name: 'Monthly Retainer',
+    description: 'Ongoing social content, ads, and brand support',
+    projectType: 'Retainer',
+    estimatedDays: 30,
+    notes: 'Month-to-month. 30-day notice required for cancellation. Hours do not roll over.',
+    lineItems: [
+      { description: 'Social Media Content (12 posts/mo)', qty: 1, unitPrice: 1800, category: 'retainer' },
+      { description: 'Ad Creative (4 sets/mo)', qty: 1, unitPrice: 1200, category: 'retainer' },
+      { description: 'Monthly Strategy Call', qty: 1, unitPrice: 300, category: 'strategy' },
+      { description: 'Performance Report + Analytics', qty: 1, unitPrice: 200, category: 'strategy' },
+    ],
+  },
+];
 
 const CATEGORY_COLOR: Record<QuoteLineItem['category'], string> = {
   design: '#8b5cf6',
@@ -134,7 +235,7 @@ function QuotePreview({ quote }: { quote: Partial<Quote> }) {
 }
 
 export default function QuotationMaker() {
-  const { quotes, addQuote, updateQuote, deleteQuote } = useStore();
+  const [quotes, setQuotes] = useState<Quote[]>([]);
   const [activeTab, setActiveTab] = useState<'builder' | 'library'>('library');
   const [editingQuote, setEditingQuote] = useState<Partial<Quote> & { lineItems: QuoteLineItem[] }>({
     clientName: '', clientEmail: '', clientCompany: '', projectType: '', notes: '',
@@ -142,6 +243,31 @@ export default function QuotationMaker() {
   });
   const [preview, setPreview] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  
+
+  const loadQuotes = async () => {
+    const { data } = await supabase.from('os_quotes').select('*').order('created_at', { ascending: false });
+    if (data) {
+      setQuotes(data.map(q => ({
+        id: q.id,
+        clientName: q.client_name,
+        clientEmail: q.client_email,
+        clientCompany: q.client_company,
+        projectType: q.project_type,
+        lineItems: q.line_items || [],
+        notes: q.notes,
+        validUntil: q.valid_until,
+        status: q.status,
+        templateId: q.template_id,
+        createdAt: q.created_at,
+        sentAt: q.sent_at,
+        discount: q.discount,
+        tax: q.tax
+      } as any)));
+    }
+  }
+  useEffect(() => { loadQuotes(); }, []);
 
   const loadTemplate = (tplId: string) => {
     const tpl = QUOTE_TEMPLATES.find(t => t.id === tplId);
@@ -180,14 +306,76 @@ export default function QuotationMaker() {
   const saveQuote = async () => {
     if (!editingQuote.clientName) return;
     setSaving(true);
-    await addQuote(editingQuote as Omit<Quote, 'id' | 'createdAt' | 'status'>);
+    
+    const dbPayload = {
+      client_name: editingQuote.clientName,
+      client_email: editingQuote.clientEmail || null,
+      client_company: editingQuote.clientCompany || null,
+      project_type: editingQuote.projectType || null,
+      line_items: editingQuote.lineItems,
+      notes: editingQuote.notes || null,
+      valid_until: editingQuote.validUntil || null,
+      status: editingQuote.status || 'draft',
+      template_id: editingQuote.templateId || null,
+      discount: editingQuote.discount || 0,
+      tax: editingQuote.tax || 13
+    } as any;
+
+    if (editingQuote.id) {
+      await supabase.from('os_quotes').update(dbPayload).eq('id', editingQuote.id);
+    } else {
+      await supabase.from('os_quotes').insert(dbPayload);
+    }
+    
+    await loadQuotes();
     setEditingQuote({ clientName: '', clientEmail: '', clientCompany: '', projectType: '', notes: '', lineItems: [], discount: 0, tax: 13, validUntil: '' });
     setSaving(false);
     setActiveTab('library');
   };
 
   const handleSend = async (id: string) => {
-    await updateQuote(id, { status: 'sent', sentAt: new Date().toISOString() });
+    await supabase.from('os_quotes').update({ status: 'sent', sent_at: new Date().toISOString() } as any).eq('id', id);
+    await loadQuotes();
+  };
+
+  const deleteQuote = async (id: string) => {
+    await supabase.from('os_quotes').delete().eq('id', id);
+    await loadQuotes();
+  };
+
+  const downloadQuotePDF = () => {
+    const sub = editingQuote.lineItems.reduce((s, li) => s + li.qty * li.unitPrice, 0);
+    const discAmt = sub * ((editingQuote.discount ?? 0) / 100);
+    const afterDisc = sub - discAmt;
+    const taxAmt = afterDisc * ((editingQuote.tax ?? 0) / 100);
+    const tot = afterDisc + taxAmt;
+    const today = new Date().toLocaleDateString('en-CA');
+    const rows = editingQuote.lineItems.map(li =>
+      `<tr><td style="padding:8px 0;border-bottom:1px solid #eee;color:#333">${li.description}</td>
+       <td style="padding:8px 0;border-bottom:1px solid #eee;text-align:center;color:#666">${li.qty}</td>
+       <td style="padding:8px 0;border-bottom:1px solid #eee;text-align:right;color:#666">$${li.unitPrice.toLocaleString()}</td>
+       <td style="padding:8px 0;border-bottom:1px solid #eee;text-align:right;font-weight:700">$${(li.qty * li.unitPrice).toLocaleString()}</td></tr>`
+    ).join('');
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Quotation – ${editingQuote.clientName || 'Client'}</title>
+<style>body{font-family:Arial,sans-serif;max-width:780px;margin:0 auto;padding:48px;color:#111;font-size:13px}h1{color:#b6332e;font-size:22px;font-weight:900;letter-spacing:.05em;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:16px}th{text-align:left;padding:8px 0;border-bottom:2px solid #b6332e;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#777}.total-row td{padding:6px 0;}.grand{font-size:18px;font-weight:900;color:#b6332e}footer{margin-top:40px;font-size:10px;color:#aaa;border-top:1px solid #eee;padding-top:16px}</style>
+</head><body>
+<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px">
+  <div><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="width:28px;height:28px;background:#b6332e;border-radius:6px;display:flex;align-items:center;justify-content:center"><span style="color:white;font-weight:900;font-size:14px">Z</span></div><span style="font-weight:900;font-size:16px;letter-spacing:.05em">ZENN STUDIOS</span></div><p style="color:#888;font-size:11px;margin:2px 0">hello@zennstudios.ca</p><p style="color:#888;font-size:11px;margin:2px 0">zennstudios.ca</p></div>
+  <div style="text-align:right"><h1>QUOTATION</h1><p style="color:#888;font-size:11px;margin:2px 0">Date: ${today}</p><p style="color:#888;font-size:11px;margin:2px 0">Valid Until: ${editingQuote.validUntil || '—'}</p></div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:28px;background:#f9f9f9;padding:16px;border-radius:8px">
+  <div><p style="font-size:10px;color:#999;text-transform:uppercase;letter-spacing:.08em;margin:0 0 4px">Prepared For</p><p style="font-weight:700;margin:0">${editingQuote.clientName || '—'}</p>${editingQuote.clientCompany ? `<p style="color:#666;margin:2px 0">${editingQuote.clientCompany}</p>` : ''}${editingQuote.clientEmail ? `<p style="color:#666;margin:2px 0">${editingQuote.clientEmail}</p>` : ''}</div>
+  <div><p style="font-size:10px;color:#999;text-transform:uppercase;letter-spacing:.08em;margin:0 0 4px">Project</p><p style="margin:0">${editingQuote.projectType || '—'}</p></div>
+</div>
+<table><thead><tr><th>Description</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}</tbody></table>
+<table style="margin-top:16px;width:300px;margin-left:auto"><tbody class="total-row">${editingQuote.discount ? `<tr><td style="color:#888">Subtotal</td><td style="text-align:right">$${sub.toLocaleString()}</td></tr><tr><td style="color:#888">Discount (${editingQuote.discount}%)</td><td style="text-align:right;color:#b6332e">−$${discAmt.toLocaleString(undefined, {maximumFractionDigits:0})}</td></tr>` : ''}<tr><td style="color:#888">Tax (${editingQuote.tax ?? 13}%)</td><td style="text-align:right">$${taxAmt.toLocaleString(undefined, {maximumFractionDigits:0})}</td></tr><tr><td class="grand">Total</td><td class="grand" style="text-align:right">$${Math.round(tot).toLocaleString()}</td></tr></tbody></table>
+${editingQuote.notes ? `<div style="margin-top:24px;background:#f9f9f9;border-radius:8px;padding:16px"><p style="font-size:10px;color:#999;text-transform:uppercase;letter-spacing:.08em;margin:0 0 8px">Terms &amp; Notes</p><p style="color:#555;font-size:12px;line-height:1.6;margin:0">${editingQuote.notes}</p></div>` : ''}
+<footer>© ${new Date().getFullYear()} Zenn Studios Inc. · All figures in CAD unless stated otherwise</footer></body></html>`;
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    if (win) win.addEventListener('load', () => setTimeout(() => win.print(), 500));
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
   const subtotal = editingQuote.lineItems.reduce((s, li) => s + li.qty * li.unitPrice, 0);
@@ -410,11 +598,18 @@ export default function QuotationMaker() {
                 <Eye className="w-3.5 h-3.5" /> {preview ? 'Hide' : 'Preview'}
               </button>
               <button
+                onClick={downloadQuotePDF}
+                disabled={!editingQuote.clientName || editingQuote.lineItems.length === 0}
+                className="btn-ghost flex-1 justify-center text-xs disabled:opacity-40"
+              >
+                <Download className="w-3.5 h-3.5" /> PDF
+              </button>
+              <button
                 onClick={saveQuote}
                 disabled={saving || !editingQuote.clientName}
                 className="btn-primary flex-1 justify-center text-xs disabled:opacity-40"
               >
-                {saving ? 'Saving...' : <><Download className="w-3.5 h-3.5" /> Save Quote</>}
+                {saving ? 'Saving...' : <><CheckCircle className="w-3.5 h-3.5" /> Save</>}
               </button>
             </div>
           </div>

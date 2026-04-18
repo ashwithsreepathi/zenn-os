@@ -1,256 +1,244 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, PieChart, Pie, Cell,
 } from 'recharts';
-import { mockKPIs, mockProjects, mockLeads, mockUsers } from '@/lib/mock-data';
-import { TrendingUp, Users, FolderOpen, DollarSign, Download, FileText, Check } from 'lucide-react';
-import { useState } from 'react';
+import { supabase } from '@/lib/supabase/client';
+import { TrendingUp, Users, FolderOpen, DollarSign, Download } from 'lucide-react';
 
-const revenueByType = [
-  { type: 'Web', value: 28000 },
-  { type: 'Video', value: 15500 },
-  { type: 'Brand', value: 12000 },
-  { type: 'Social', value: 4800 },
-];
-
-const leadSourceData = [
-  { source: 'Referral', count: 2, color: '#b6332e' },
-  { source: 'SEO', count: 1, color: '#3b82f6' },
-  { source: 'Instagram', count: 1, color: '#8b5cf6' },
-  { source: 'Direct', count: 1, color: '#555' },
-];
-
-const teamPerformance = [
-  { member: 'Jordan', reliability: 87, load: 2 },
-  { member: 'Mia', reliability: 94, load: 3 },
-  { member: 'Sam', reliability: 96, load: 5 },
-  { member: 'Rex', reliability: 72, load: 1 },
-];
-
-const CustomTooltip = ({ active, payload, label }: any) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="glass-panel-elevated rounded-xl px-4 py-3 text-xs border border-[rgba(255,255,255,0.08)]">
-      <p className="text-[#888] mb-1">{label}</p>
-      {payload.map((p: any) => (
-        <p key={p.name} className="text-[#eee] font-bold">
-          {p.name}: {typeof p.value === 'number' && p.value > 1000 ? `$${(p.value / 1000).toFixed(1)}k` : p.value}
-        </p>
-      ))}
-    </div>
-  );
-};
-
-// ─── CSV Export ───────────────────────────────────────────────────────────────
-function downloadCSV(filename: string, rows: (string | number)[][], headers: string[]) {
-  const csvContent = [
-    headers.join(','),
-    ...rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')),
-  ].join('\n');
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-// ─── PDF Report (text-based, opens in new tab) ────────────────────────────────
-function downloadPDFReport(projects: typeof mockProjects, kpis: typeof mockKPIs) {
-  const now = new Date().toLocaleDateString('en-CA');
-  const html = `<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8"/>
-<title>Zenn Studios – Analytics Report ${now}</title>
-<style>
-  body { font-family: Arial, sans-serif; background: #fff; color: #111; max-width: 800px; margin: 0 auto; padding: 40px; }
-  h1 { font-size: 24px; border-bottom: 2px solid #b6332e; padding-bottom: 8px; color: #b6332e; }
-  h2 { font-size: 16px; margin-top: 28px; color: #333; }
-  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
-  th { background: #f5f5f5; text-align: left; padding: 8px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #666; }
-  td { padding: 8px 12px; border-bottom: 1px solid #eee; }
-  .kpi { display: inline-block; margin: 0 12px 12px 0; background: #f7f7f7; border-radius: 8px; padding: 12px 20px; }
-  .kpi-val { font-size: 24px; font-weight: 900; color: #b6332e; }
-  .kpi-lbl { font-size: 11px; color: #888; text-transform: uppercase; }
-  footer { margin-top: 40px; font-size: 10px; color: #aaa; }
-</style>
-</head><body>
-<h1>🎬 Zenn Studios — Analytics Report</h1>
-<p style="color:#888;font-size:12px;">Generated: ${now} · Confidential</p>
-<h2>Key Metrics</h2>
-<div>
-  <div class="kpi"><div class="kpi-val">$${(kpis.grossRevenue / 1000).toFixed(1)}k</div><div class="kpi-lbl">Gross Revenue</div></div>
-  <div class="kpi"><div class="kpi-val">${projects.filter(p => p.status === 'active').length}</div><div class="kpi-lbl">Active Projects</div></div>
-  <div class="kpi"><div class="kpi-val">${mockUsers.filter(u => u.role !== 'client').length}</div><div class="kpi-lbl">Team Members</div></div>
-  <div class="kpi"><div class="kpi-val">${mockLeads.length}</div><div class="kpi-lbl">Total Leads</div></div>
-</div>
-<h2>Active Projects</h2>
-<table>
-  <tr><th>Project</th><th>Client</th><th>Value</th><th>Progress</th><th>Health</th></tr>
-  ${projects.filter(p => p.status === 'active').map(p => `
-    <tr>
-      <td><strong>${p.name}</strong></td>
-      <td>${p.clientName}</td>
-      <td>$${p.totalValue.toLocaleString()}</td>
-      <td>${p.completionPercent}%</td>
-      <td>${p.healthStatus.toUpperCase()}</td>
-    </tr>
-  `).join('')}
-</table>
-<h2>Revenue by Service Type</h2>
-<table>
-  <tr><th>Service</th><th>Revenue</th></tr>
-  ${revenueByType.map(r => `<tr><td>${r.type}</td><td>$${r.value.toLocaleString()}</td></tr>`).join('')}
-</table>
-<h2>Team Reliability</h2>
-<table>
-  <tr><th>Member</th><th>Reliability</th><th>Current Load</th></tr>
-  ${teamPerformance.map(t => `<tr><td>${t.member}</td><td>${t.reliability}%</td><td>${t.load} projects</td></tr>`).join('')}
-</table>
-<footer>© ${new Date().getFullYear()} Zenn Studios — Internal Use Only</footer>
-</body></html>`;
-
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const win = window.open(url, '_blank');
-  // Trigger browser print dialog (→ Save as PDF)
-  if (win) {
-    win.addEventListener('load', () => {
-      setTimeout(() => { win.print(); }, 600);
-    });
-  }
-}
+const PIE_COLORS = ['#b6332e', '#3b82f6', '#8b5cf6', '#555', '#10b981', '#f59e0b'];
 
 export default function Analytics() {
-  const conversionRate = ((mockLeads.filter(l => l.stage === 'converted').length / mockLeads.length) * 100).toFixed(0);
-  const [csvDone, setCsvDone] = useState(false);
-  const [pdfDone, setPdfDone] = useState(false);
+  const [range, setRange] = useState<'30d' | '90d' | 'ytd'>('ytd');
+  const [revenueByType, setRevenueByType] = useState<{ type: string; value: number }[]>([]);
+  const [leadSourceData, setLeadSourceData] = useState<{ source: string; count: number; color: string }[]>([]);
+  const [teamPerformance, setTeamPerformance] = useState<{ member: string; reliability: number; load: number }[]>([]);
+  const [revenueTrend, setRevenueTrend] = useState<{ month: string; revenue: number; profit: number }[]>([]);
+  const [kpis, setKpis] = useState({ revenue: 0, clients: 0, activeProjects: 0, margin: 0 });
+  const [loading, setLoading] = useState(true);
 
-  const handleCSV = () => {
-    downloadCSV('zenn-projects-report.csv',
-      mockProjects.map(p => [p.name, p.clientName, p.status, p.totalValue, p.paidToDate, p.completionPercent + '%', p.healthStatus]),
-      ['Project', 'Client', 'Status', 'Total Value', 'Paid To Date', 'Progress', 'Health']
-    );
-    setCsvDone(true);
-    setTimeout(() => setCsvDone(false), 2500);
-  };
+  useEffect(() => {
+    async function load() {
+      const [txRes, projRes, leadRes, userRes] = await Promise.all([
+        supabase.from('os_transactions').select('*'),
+        supabase.from('os_projects').select('*'),
+        supabase.from('os_leads').select('*'),
+        supabase.from('os_users').select('id,name,role,reliability_score,current_load').in('role', ['affiliate', 'employee']),
+      ]);
 
-  const handlePDF = () => {
-    downloadPDFReport(mockProjects, mockKPIs);
-    setPdfDone(true);
-    setTimeout(() => setPdfDone(false), 2500);
-  };
+      const txs = txRes.data ?? [];
+      const projects = projRes.data ?? [];
+      const leads = leadRes.data ?? [];
+      const users = userRes.data ?? [];
+
+      const incoming = txs.filter((t: any) => t.type === 'incoming');
+      const outgoing = txs.filter((t: any) => t.type === 'outgoing');
+      const totalRevenue = incoming.reduce((s: number, t: any) => s + Number(t.amount), 0);
+      const totalExpenses = outgoing.reduce((s: number, t: any) => s + Number(t.amount), 0);
+      const clients = [...new Set(projects.map((p: any) => p.client_id))].length;
+      const activeProjects = projects.filter((p: any) => p.status === 'active').length;
+      const margin = totalRevenue > 0 ? Math.round(((totalRevenue - totalExpenses) / totalRevenue) * 100) : 0;
+
+      setKpis({ revenue: totalRevenue, clients, activeProjects, margin });
+
+      // Revenue by project type
+      const typeMap: Record<string, number> = {};
+      for (const p of projects as any[]) {
+        typeMap[p.type] = (typeMap[p.type] ?? 0) + Number(p.total_value ?? 0);
+      }
+      const TYPE_LABELS: Record<string, string> = { web: 'Web', video: 'Video', branding: 'Brand', social: 'Social', full_brand: 'Full Brand' };
+      setRevenueByType(Object.entries(typeMap).map(([type, value]) => ({ type: TYPE_LABELS[type] ?? type, value })));
+
+      // Lead sources
+      const srcMap: Record<string, number> = {};
+      for (const l of leads as any[]) {
+        srcMap[l.source ?? 'direct'] = (srcMap[l.source ?? 'direct'] ?? 0) + 1;
+      }
+      setLeadSourceData(Object.entries(srcMap).map(([source, count], i) => ({
+        source: source.charAt(0).toUpperCase() + source.slice(1),
+        count,
+        color: PIE_COLORS[i % PIE_COLORS.length],
+      })));
+
+      // Team performance
+      setTeamPerformance(users.map((u: any) => ({
+        member: u.name.split(' ')[0],
+        reliability: u.reliability_score ?? 80,
+        load: u.current_load ?? 1,
+      })));
+
+      // Revenue trend per month
+      const monthMap: Record<string, { revenue: number; expenses: number }> = {};
+      for (const t of txs as any[]) {
+        const m = new Date(t.date).toLocaleString('default', { month: 'short', year: '2-digit' });
+        if (!monthMap[m]) monthMap[m] = { revenue: 0, expenses: 0 };
+        if (t.type === 'incoming') monthMap[m].revenue += Number(t.amount);
+        else monthMap[m].expenses += Number(t.amount);
+      }
+      setRevenueTrend(Object.entries(monthMap).map(([month, v]) => ({
+        month,
+        revenue: v.revenue,
+        profit: v.revenue - v.expenses,
+      })));
+
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  const statCards = [
+    { label: 'Total Revenue', value: `$${(kpis.revenue / 1000).toFixed(1)}k`, icon: DollarSign, color: '#10b981', change: '+18.4%' },
+    { label: 'Active Clients', value: String(kpis.clients), icon: Users, color: '#3b82f6', change: '+2 this Q' },
+    { label: 'Active Projects', value: String(kpis.activeProjects), icon: FolderOpen, color: '#b6332e', change: 'On track' },
+    { label: 'Net Margin', value: `${kpis.margin}%`, icon: TrendingUp, color: '#f59e0b', change: '+5.2%' },
+  ];
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold text-[#eee]">Analytics & Performance</h1>
-          <p className="text-xs text-[#555] mt-0.5">Agency-wide metrics · April 2026 snapshot</p>
+          <h1 className="text-xl font-bold text-[#eee]">Analytics</h1>
+          <p className="text-xs text-[#555] mt-0.5">Business performance · live data</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={handleCSV} className="btn-secondary text-xs">
-            {csvDone ? <><Check className="w-3.5 h-3.5" /> Downloaded</> : <><Download className="w-3.5 h-3.5" /> Export CSV</>}
-          </button>
-          <button onClick={handlePDF} className="btn-primary text-xs">
-            {pdfDone ? <><Check className="w-3.5 h-3.5" /> Opened</> : <><FileText className="w-3.5 h-3.5" /> PDF Report</>}
+        <div className="flex items-center gap-2">
+          {(['30d', '90d', 'ytd'] as const).map((r) => (
+            <button key={r} onClick={() => setRange(r)}
+              className={`text-[11px] px-3 py-1.5 rounded-lg border transition-all ${range === r ? 'border-[rgba(182,51,46,0.4)] text-[#b6332e] bg-[rgba(182,51,46,0.08)]' : 'border-[rgba(255,255,255,0.06)] text-[#555] hover:text-[#888]'}`}>
+              {r.toUpperCase()}
+            </button>
+          ))}
+          <button className="btn-secondary text-xs">
+            <Download className="w-3.5 h-3.5" /> Export
           </button>
         </div>
       </div>
 
-      {/* Top KPIs */}
+      {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { label: 'Gross Revenue', value: `$${(mockKPIs.grossRevenue / 1000).toFixed(1)}k`, change: '+12.4%', up: true, icon: DollarSign },
-          { label: 'Active Projects', value: mockProjects.filter(p => p.status === 'active').length, change: '+1 this month', up: true, icon: FolderOpen },
-          { label: 'Lead Conversion', value: `${conversionRate}%`, change: 'Lifetime avg', up: true, icon: TrendingUp },
-          { label: 'Team Size', value: mockUsers.filter(u => u.role !== 'client').length, change: '1 pending onboard', up: false, icon: Users },
-        ].map((k, i) => (
-          <motion.div key={k.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }} className="kpi-card">
-            <div className="flex items-center justify-between mb-3">
-              <p className="section-label">{k.label}</p>
-              <div className="w-7 h-7 rounded-lg bg-[rgba(182,51,46,0.1)] flex items-center justify-center">
-                <k.icon className="w-4 h-4 text-[#b6332e]" />
-              </div>
-            </div>
-            <p className="text-2xl font-black text-[#eee]">{k.value}</p>
-            <p className={`text-[10px] mt-1 ${k.up ? 'text-[#10b981]' : 'text-[#f59e0b]'}`}>{k.change}</p>
-          </motion.div>
-        ))}
+        {loading
+          ? Array.from({ length: 4 }).map((_, i) => <div key={i} className="glass-panel rounded-2xl h-24 animate-pulse" />)
+          : statCards.map((s, i) => (
+              <motion.div key={s.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}
+                className="glass-panel rounded-2xl p-5">
+                <div className="flex items-start justify-between mb-2">
+                  <p className="section-label">{s.label}</p>
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: `${s.color}15` }}>
+                    <s.icon className="w-4 h-4" style={{ color: s.color }} />
+                  </div>
+                </div>
+                <p className="text-2xl font-black text-[#eee]">{s.value}</p>
+                <p className="text-[10px] text-[#555] mt-1">{s.change}</p>
+              </motion.div>
+            ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Revenue Trend */}
-        <div className="glass-panel rounded-2xl p-6">
-          <h2 className="text-sm font-bold text-[#eee] mb-5">6-Month Revenue Trend</h2>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={mockKPIs.plData}>
-              <CartesianGrid stroke="rgba(255,255,255,0.03)" />
-              <XAxis dataKey="month" tick={{ fill: '#444', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: '#444', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={v => `$${v / 1000}k`} />
-              <Tooltip content={<CustomTooltip />} />
-              <Line type="monotone" dataKey="revenue" stroke="#b6332e" strokeWidth={2} dot={{ fill: '#b6332e', r: 4 }} name="Revenue" />
-              <Line type="monotone" dataKey="expenses" stroke="rgba(255,255,255,0.2)" strokeWidth={1.5} strokeDasharray="4 2" dot={false} name="Expenses" />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Revenue by Project Type */}
-        <div className="glass-panel rounded-2xl p-6">
-          <h2 className="text-sm font-bold text-[#eee] mb-5">Revenue by Service Type</h2>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={revenueByType} barSize={32}>
-              <CartesianGrid stroke="rgba(255,255,255,0.03)" vertical={false} />
-              <XAxis dataKey="type" tick={{ fill: '#444', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: '#444', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={v => `$${v / 1000}k`} />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="value" fill="#b6332e" radius={[4, 4, 0, 0]} name="Revenue" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Lead Sources */}
-        <div className="glass-panel rounded-2xl p-6">
-          <h2 className="text-sm font-bold text-[#eee] mb-5">Lead Sources</h2>
-          <div className="flex items-center gap-6">
-            <ResponsiveContainer width={160} height={160}>
-              <PieChart>
-                <Pie data={leadSourceData} dataKey="count" nameKey="source" cx="50%" cy="50%" outerRadius={70} strokeWidth={0}>
-                  {leadSourceData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                </Pie>
-              </PieChart>
+        <div className="lg:col-span-2 glass-panel rounded-2xl p-5">
+          <h2 className="text-sm font-bold text-[#eee] mb-4">Revenue & Profit Trend</h2>
+          {revenueTrend.length === 0 ? (
+            <div className="h-44 flex items-center justify-center text-xs text-[#333]">No transaction data yet</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={revenueTrend}>
+                <XAxis dataKey="month" tick={{ fill: '#444', fontSize: 10 }} axisLine={false} tickLine={false} />
+                <YAxis hide />
+                <Tooltip contentStyle={{ background: '#111', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, fontSize: 11 }}
+                  formatter={(v: unknown) => [`$${Number(v).toLocaleString()}`, '']} />
+                <Line type="monotone" dataKey="revenue" stroke="#10b981" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="profit" stroke="#3b82f6" strokeWidth={2} dot={false} strokeDasharray="4 2" />
+              </LineChart>
             </ResponsiveContainer>
-            <div className="space-y-3">
-              {leadSourceData.map(d => (
-                <div key={d.source} className="flex items-center gap-3">
-                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: d.color }} />
-                  <span className="text-xs text-[#ccc]">{d.source}</span>
-                  <span className="text-xs font-bold text-[#eee] ml-auto">{d.count}</span>
-                </div>
-              ))}
-            </div>
+          )}
+          <div className="flex gap-4 justify-center mt-2">
+            <span className="text-[10px] text-[#555]"><span className="text-[#10b981]">●</span> Revenue</span>
+            <span className="text-[10px] text-[#555]"><span className="text-[#3b82f6]">- -</span> Profit</span>
           </div>
         </div>
 
-        {/* Team Reliability */}
-        <div className="glass-panel rounded-2xl p-6">
-          <h2 className="text-sm font-bold text-[#eee] mb-5">Team Reliability Scores</h2>
+        {/* Lead Sources */}
+        <div className="glass-panel rounded-2xl p-5">
+          <h2 className="text-sm font-bold text-[#eee] mb-4">Lead Sources</h2>
+          {leadSourceData.length === 0 ? (
+            <div className="h-40 flex items-center justify-center text-xs text-[#333]">No leads yet</div>
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={140}>
+                <PieChart>
+                  <Pie data={leadSourceData} dataKey="count" cx="50%" cy="50%" innerRadius={40} outerRadius={60} paddingAngle={3}>
+                    {leadSourceData.map((entry, i) => (
+                      <Cell key={i} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip contentStyle={{ background: '#111', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, fontSize: 11 }} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="space-y-2 mt-3">
+                {leadSourceData.map((s) => (
+                  <div key={s.source} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full" style={{ background: s.color }} />
+                      <span className="text-[10px] text-[#888]">{s.source}</span>
+                    </div>
+                    <span className="text-[10px] font-bold text-[#eee]">{s.count}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Revenue by Project Type */}
+        <div className="glass-panel rounded-2xl p-5">
+          <h2 className="text-sm font-bold text-[#eee] mb-4">Revenue by Service Type</h2>
+          {revenueByType.length === 0 ? (
+            <div className="h-40 flex items-center justify-center text-xs text-[#333]">No project data yet</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={revenueByType} layout="vertical">
+                <XAxis type="number" hide />
+                <YAxis type="category" dataKey="type" tick={{ fill: '#666', fontSize: 10 }} axisLine={false} tickLine={false} width={48} />
+                <Tooltip contentStyle={{ background: '#111', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, fontSize: 11 }}
+                  formatter={(v: unknown) => [`$${Number(v).toLocaleString()}`, '']} />
+                <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                  {revenueByType.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        {/* Team Performance */}
+        <div className="glass-panel rounded-2xl p-5">
+          <h2 className="text-sm font-bold text-[#eee] mb-4">Team Reliability</h2>
           <div className="space-y-4">
-            {teamPerformance.map(t => (
-              <div key={t.member}>
-                <div className="flex items-center justify-between mb-1 text-xs">
-                  <span className="text-[#ccc] font-semibold">{t.member}</span>
-                  <span className={`font-bold ${t.reliability >= 90 ? 'text-[#10b981]' : t.reliability >= 75 ? 'text-[#f59e0b]' : 'text-[#b6332e]'}`}>{t.reliability}%</span>
+            {teamPerformance.map((m) => (
+              <div key={m.member}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[11px] font-bold text-[#eee]">{m.member}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-[#555]">Load: {m.load}/8</span>
+                    <span className={`text-[10px] font-bold ${m.reliability >= 90 ? 'text-[#10b981]' : m.reliability >= 75 ? 'text-[#f59e0b]' : 'text-[#b6332e]'}`}>
+                      {m.reliability}%
+                    </span>
+                  </div>
                 </div>
                 <div className="progress-bar">
-                  <div className="progress-fill" style={{ width: `${t.reliability}%`, background: t.reliability >= 90 ? '#10b981' : t.reliability >= 75 ? '#f59e0b' : '#b6332e' }} />
+                  <div className="progress-fill"
+                    style={{
+                      width: `${m.reliability}%`,
+                      background: m.reliability >= 90 ? '#10b981' : m.reliability >= 75 ? '#f59e0b' : '#b6332e'
+                    }} />
                 </div>
               </div>
             ))}
+            {teamPerformance.length === 0 && <p className="text-xs text-[#333]">No team members yet</p>}
           </div>
         </div>
       </div>

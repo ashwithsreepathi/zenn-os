@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Search, ChevronRight, CheckCircle, AlertCircle, Mail, Building2, ExternalLink, MessageSquare, Trash2, ArrowRight } from 'lucide-react';
-import { useStore } from '@/lib/store';
-import type { Enquiry } from '@/lib/store';
+import { Plus, Search, ChevronRight, CheckCircle, AlertCircle, Mail, Building2, ExternalLink, MessageSquare, Trash2, ArrowRight, Loader2 } from 'lucide-react';
+import { supabase } from '@/lib/supabase/client';
+import { dbAddEnquiry, dbUpdateEnquiry, dbAddLead } from '@/lib/supabase/db';
 import Link from 'next/link';
+
 
 const STATUS_CONFIG: Record<Enquiry['status'], { label: string; color: string; bg: string }> = {
   new: { label: 'New', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
@@ -24,27 +25,38 @@ const SOURCE_EMOJI: Record<string, string> = {
   'Cold Outreach': '📨',
 };
 
-function NewEnquiryModal({ onClose }: { onClose: () => void }) {
-  const { addEnquiry } = useStore();
+type EnquiryStatus = 'new' | 'read' | 'responded' | 'converted' | 'spam';
+interface Enquiry {
+  id: string; name: string; email: string; company?: string;
+  project_type?: string; budget?: string; message?: string;
+  source?: string; status: EnquiryStatus; created_at: string;
+}
+
+function NewEnquiryModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [form, setForm] = useState({
-    name: '',
-    email: '',
-    company: '',
-    projectType: '',
-    budget: '',
-    message: '',
-    source: 'Direct',
+    name: '', email: '', company: '', projectType: '', budget: '', message: '', source: 'Direct',
   });
 
   const handleSave = async () => {
     if (!form.name || !form.email || !form.message) return;
     setSaving(true);
-    await addEnquiry(form);
-    setSaving(false);
-    setDone(true);
-    setTimeout(onClose, 1200);
+    try {
+      await dbAddEnquiry({
+        name: form.name, email: form.email, company: form.company || null,
+        project_type: form.projectType || null, budget: form.budget || null,
+        message: form.message, source: form.source.toLowerCase(),
+      });
+      setDone(true);
+      onAdded();
+      setTimeout(onClose, 1200);
+    } catch (err) {
+      console.error('Add enquiry error:', err);
+      alert('Failed to add enquiry.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -119,32 +131,38 @@ function NewEnquiryModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function EnquiryDetail({ enquiry, onClose }: { enquiry: Enquiry; onClose: () => void }) {
-  const { updateEnquiry, addLead } = useStore();
+function EnquiryDetail({ enquiry, onRefresh, onClose }: { enquiry: Enquiry; onRefresh: () => void; onClose: () => void }) {
   const [converting, setConverting] = useState(false);
   const [converted, setConverted] = useState(false);
 
-  const handleStatus = async (status: Enquiry['status']) => {
-    await updateEnquiry(enquiry.id, { status });
+  const handleStatus = async (status: EnquiryStatus) => {
+    await dbUpdateEnquiry(enquiry.id, { status });
+    onRefresh();
   };
 
   const convertToLead = async () => {
     setConverting(true);
-    await addLead({
-      companyName: enquiry.company ?? '',
-      contactName: enquiry.name,
-      email: enquiry.email,
-      projectType: enquiry.projectType,
-      estimatedBudget: 0,
-      source: 'direct',
-      stage: 'new',
-      score: 70,
-      temperature: 'warm',
-      notes: enquiry.message,
-    });
-    await updateEnquiry(enquiry.id, { status: 'converted' });
-    setConverting(false);
-    setConverted(true);
+    try {
+      await dbAddLead({
+        company_name: enquiry.company ?? '',
+        contact_name: enquiry.name,
+        email: enquiry.email,
+        project_type: enquiry.project_type ?? '',
+        estimated_budget: 0,
+        source: 'direct',
+        stage: 'new',
+        score: 70,
+        temperature: 'warm',
+        notes: enquiry.message ?? '',
+      });
+      await dbUpdateEnquiry(enquiry.id, { status: 'converted' });
+      onRefresh();
+      setConverting(false);
+      setConverted(true);
+    } catch (err) {
+      console.error(err);
+      setConverting(false);
+    }
   };
 
   return (
@@ -164,10 +182,10 @@ function EnquiryDetail({ enquiry, onClose }: { enquiry: Enquiry; onClose: () => 
           {[
             { label: 'Email', value: enquiry.email, icon: Mail },
             { label: 'Company', value: enquiry.company ?? 'N/A', icon: Building2 },
-            { label: 'Source', value: `${SOURCE_EMOJI[enquiry.source] ?? '📨'} ${enquiry.source}`, icon: null },
+            { label: 'Source', value: `${SOURCE_EMOJI[enquiry.source ?? ''] ?? '📨'} ${enquiry.source}`, icon: null },
             { label: 'Budget', value: enquiry.budget || 'Not specified', icon: null },
-            { label: 'Project', value: enquiry.projectType || 'Not specified', icon: null },
-            { label: 'Received', value: new Date(enquiry.createdAt).toLocaleDateString('en-CA'), icon: null },
+            { label: 'Project', value: enquiry.project_type || 'Not specified', icon: null },
+            { label: 'Received', value: new Date(enquiry.created_at).toLocaleDateString('en-CA'), icon: null },
           ].map(r => (
             <div key={r.label} className="flex justify-between border-b border-[rgba(255,255,255,0.04)] pb-2">
               <span className="text-[#444]">{r.label}</span>
@@ -180,7 +198,7 @@ function EnquiryDetail({ enquiry, onClose }: { enquiry: Enquiry; onClose: () => 
         <div>
           <p className="section-label mb-2">Message</p>
           <div className="bg-[#0a0a0a] rounded-xl p-3 border border-[rgba(255,255,255,0.04)]">
-            <p className="text-xs text-[#aaa] leading-relaxed">"{enquiry.message}"</p>
+            <p className="text-xs text-[#aaa] leading-relaxed">"{enquiry.message ?? ''}"</p>
           </div>
         </div>
 
@@ -221,11 +239,26 @@ function EnquiryDetail({ enquiry, onClose }: { enquiry: Enquiry; onClose: () => 
 }
 
 export default function InquiryInbox() {
-  const { enquiries, updateEnquiry } = useStore();
+  const [enquiries, setEnquiries] = useState<Enquiry[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<Enquiry['status'] | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<EnquiryStatus | 'all'>('all');
   const [selected, setSelected] = useState<Enquiry | null>(null);
   const [showModal, setShowModal] = useState(false);
+
+  const loadEnquiries = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('os_enquiries')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (!error && data) setEnquiries(data as Enquiry[]);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadEnquiries(); }, [loadEnquiries]);
+
+  const newCount = enquiries.filter(e => e.status === 'new').length;
 
   const filtered = enquiries.filter(e => {
     const matchSearch = e.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -235,15 +268,13 @@ export default function InquiryInbox() {
     return matchSearch && matchStatus;
   });
 
-  const newCount = enquiries.filter(e => e.status === 'new').length;
-
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-[#eee]">Inquiry Inbox</h1>
           <p className="text-xs text-[#555] mt-0.5">
-            {newCount > 0 ? <span className="text-[#3b82f6]">{newCount} unread</span> : 'All caught up'} · {enquiries.length} total enquiries
+            {loading ? 'Loading...' : newCount > 0 ? <span className="text-[#3b82f6]">{newCount} unread</span> : 'All caught up'} · {enquiries.length} total enquiries
           </p>
         </div>
         <div className="flex gap-2">
@@ -295,7 +326,12 @@ export default function InquiryInbox() {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ delay: i * 0.04 }}
-                    onClick={() => { setSelected(isSelected ? null : e); if (!isSelected && e.status === 'new') updateEnquiry(e.id, { status: 'read' }); }}
+                    onClick={() => {
+                      setSelected(isSelected ? null : e);
+                      if (!isSelected && e.status === 'new') {
+                        dbUpdateEnquiry(e.id, { status: 'read' }).then(loadEnquiries);
+                      }
+                    }}
                     className={`p-4 cursor-pointer transition-colors flex items-start gap-4 ${isSelected ? 'bg-[rgba(182,51,46,0.05)]' : 'hover:bg-[#111]'} ${e.status === 'new' ? 'border-l-2 border-[#3b82f6]' : ''}`}
                   >
                     <div className="w-9 h-9 rounded-xl bg-[#111] border border-[rgba(255,255,255,0.06)] flex items-center justify-center text-sm font-bold text-[#555] flex-shrink-0">
@@ -307,11 +343,11 @@ export default function InquiryInbox() {
                         {e.status === 'new' && <span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6] flex-shrink-0" />}
                       </div>
                       <p className="text-[10px] text-[#555] truncate">{e.company ? `${e.company} · ` : ''}{e.email}</p>
-                      <p className="text-[10px] text-[#444] mt-1 truncate">{e.message.slice(0, 80)}...</p>
+                      <p className="text-[10px] text-[#444] mt-1 truncate">{(e.message ?? '').slice(0, 80)}...</p>
                     </div>
                     <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
                       <span className="text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: sc.bg, color: sc.color }}>{sc.label}</span>
-                      <span className="text-[9px] text-[#333]">{new Date(e.createdAt).toLocaleDateString('en-CA')}</span>
+                      <span className="text-[9px] text-[#333]">{new Date(e.created_at).toLocaleDateString('en-CA')}</span>
                     </div>
                   </motion.div>
                 );
@@ -325,6 +361,7 @@ export default function InquiryInbox() {
           {selected && (
             <EnquiryDetail
               enquiry={enquiries.find(e => e.id === selected.id) ?? selected}
+              onRefresh={loadEnquiries}
               onClose={() => setSelected(null)}
             />
           )}
@@ -332,7 +369,7 @@ export default function InquiryInbox() {
       </div>
 
       <AnimatePresence>
-        {showModal && <NewEnquiryModal onClose={() => setShowModal(false)} />}
+        {showModal && <NewEnquiryModal onClose={() => setShowModal(false)} onAdded={loadEnquiries} />}
       </AnimatePresence>
     </div>
   );

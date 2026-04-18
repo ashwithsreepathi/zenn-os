@@ -4,8 +4,8 @@ import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   User, Bell, Shield, Palette, Smartphone, ChevronRight, Check,
-  Moon, Sun, Monitor, Globe, Lock, Eye, EyeOff, Save, LogOut, Trash2,
-  AlertTriangle, Volume2, Mail, Phone, ToggleLeft, ToggleRight
+  Lock, Eye, EyeOff, Save, LogOut, Trash2,
+  AlertTriangle, Mail, Phone
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -27,7 +27,7 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
   );
 }
 
-function ProfileTab({ user }: { user: any }) {
+function ProfileTab({ user }: { user: any /* eslint-disable-line @typescript-eslint/no-explicit-any */ }) {
   const [form, setForm] = useState({ name: user?.name ?? '', title: user?.title ?? '', timezone: user?.timezone ?? 'America/Toronto', bio: '' });
   const [saved, setSaved] = useState(false);
 
@@ -201,7 +201,7 @@ function SecurityTab() {
         </div>
         {twoFA && (
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="mt-4 bg-[rgba(16,185,129,0.08)] border border-[rgba(16,185,129,0.2)] rounded-xl p-3">
-            <p className="text-[10px] text-[#10b981]">✓ 2FA will be enabled on next login. You'll receive a QR code by email.</p>
+            <p className="text-[10px] text-[#10b981]">✓ 2FA will be enabled on next login. You&apos;ll receive a QR code by email.</p>
           </motion.div>
         )}
       </div>

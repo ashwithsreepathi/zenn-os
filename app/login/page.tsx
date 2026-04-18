@@ -246,15 +246,15 @@ export default function LoginPage() {
           <p className="font-mono mb-3 text-[#444] uppercase tracking-wider text-[10px]">Demo Credentials — click any to auto-fill</p>
           <div className="space-y-1.5">
             {[
-              { label: '👑 Admin', email: 'ash@zennstudios.ca', desc: 'Full access + View As' },
+              { label: '👑 Admin', email: 'ash@zennstudios.com', desc: 'Full access + View As' },
               { label: '🏢 Client (Web + BizDev)', email: 'info@montax.ca', desc: 'Montax Financial' },
-              { label: '🎬 Client (Video + Social + Photo)', email: 'team@blackfridaybins.ca', desc: 'Black Friday Bins' },
-              { label: '👤 Employee', email: 'sam.ko@zennstudios.ca', desc: 'Project Manager' },
+              { label: '🎬 Client (Video + Social)', email: 'team@blackfridaybins.ca', desc: 'Black Friday Bins' },
+              { label: '👤 Employee', email: 'sam.ko@zennstudios.com', desc: 'Project Manager' },
               { label: '🎨 Affiliate', email: 'mia.chen@design.co', desc: 'Brand & UI Designer' },
               { label: '🎥 Affiliate', email: 'jordan@freelance.io', desc: 'Lead Video Editor' },
             ].map(cred => (
               <button key={cred.email}
-                onClick={() => { setEmail(cred.email); setPassword('demo123'); }}
+                onClick={() => { setEmail(cred.email); setPassword('Zenn2026!'); }}
                 className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[rgba(255,255,255,0.04)] transition-colors group text-left">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-[11px] text-[#666] font-semibold flex-shrink-0">{cred.label}</span>
@@ -264,7 +264,7 @@ export default function LoginPage() {
               </button>
             ))}
           </div>
-          <p className="text-[#2a2a2a] mt-2 text-[10px] font-mono">Password: any value</p>
+          <p className="text-[#2a2a2a] mt-2 text-[10px] font-mono">Password: Zenn2026!</p>
         </motion.div>
       </motion.div>
     </div>

@@ -3,10 +3,10 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { Bell, Search, ChevronDown, Eye, X, Check, AlertTriangle, MessageSquare, Zap } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { UserRole } from '@/lib/types';
-import { mockNudges, mockUsers } from '@/lib/mock-data';
+import { supabase } from '@/lib/supabase/client';
 
 const BREADCRUMBS: Record<string, string> = {
   '/admin/executive-dashboard': 'Executive Dashboard',
@@ -64,16 +64,7 @@ const NOTIF_COLOR: Record<string, string> = {
   nudge: '#f59e0b', proof: '#10b981', message: '#3b82f6', system: '#b6332e',
 };
 
-// Build View As options from both roles AND specific client users
-const VIEW_AS_OPTIONS = [
-  { label: 'Employee View', role: 'employee' as UserRole, userId: undefined },
-  { label: 'Affiliate View', role: 'affiliate' as UserRole, userId: undefined },
-  ...mockUsers.filter(u => u.role === 'client').map(u => ({
-    label: `${u.name.split(' ')[0]}'s View (${u.company ?? 'Client'})`,
-    role: 'client' as UserRole,
-    userId: u.id,
-  })),
-];
+
 
 export function Topbar() {
   const pathname = usePathname();
@@ -82,6 +73,27 @@ export function Topbar() {
   const [showRoleMenu, setShowRoleMenu] = useState(false);
   const [showNotifDrawer, setShowNotifDrawer] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>(MOCK_NOTIFICATIONS);
+  const [clientOptions, setClientOptions] = useState<{label: string, role: UserRole, userId?: string}[]>([]);
+
+  useEffect(() => {
+    if (user?.role === 'admin') {
+      supabase.from('os_users').select('id,name,company').eq('role', 'client').then(({ data }) => {
+        if (data) {
+          setClientOptions(data.map(u => ({
+            label: `${u.name.split(' ')[0]}'s View (${u.company ?? 'Client'})`,
+            role: 'client' as UserRole,
+            userId: u.id,
+          })));
+        }
+      });
+    }
+  }, [user?.role]);
+
+  const VIEW_AS_OPTIONS = [
+    { label: 'Employee View', role: 'employee' as UserRole, userId: undefined },
+    { label: 'Affiliate View', role: 'affiliate' as UserRole, userId: undefined },
+    ...clientOptions,
+  ];
 
   const pageTitle = BREADCRUMBS[pathname] ?? 'Zenn OS';
   const unreadCount = notifications.filter(n => !n.read).length;

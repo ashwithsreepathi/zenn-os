@@ -1,14 +1,14 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { supabase } from '@/lib/supabase/client';
 import type { OSUser, UserRole } from '@/lib/types';
-import { mockUsers } from '@/lib/mock-data';
 
 interface AuthContextValue {
   user: OSUser | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; redirectTo: string; error?: string }>;
-  logout: () => void;
+  logout: () => Promise<void>;
   impersonating: UserRole | null;
   impersonatingUserId: string | null;
   startImpersonation: (role: UserRole, userId?: string) => void;
@@ -18,17 +18,6 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-// Simulated email → role mapping
-const EMAIL_ROLE_MAP: Record<string, UserRole> = {
-  'ash@zennstudios.ca': 'admin',
-  'sam.ko@zennstudios.ca': 'employee',
-  'jordan@freelance.io': 'affiliate',
-  'mia.chen@design.co': 'affiliate',
-  'rex.audio@studio.com': 'affiliate',
-  'info@montax.ca': 'client',
-  'team@blackfridaybins.ca': 'client',
-};
-
 const ROLE_REDIRECTS: Record<UserRole, string> = {
   admin: '/admin/executive-dashboard',
   employee: '/team/assigned-board',
@@ -36,61 +25,143 @@ const ROLE_REDIRECTS: Record<UserRole, string> = {
   client: '/portal/client-dashboard',
 };
 
+// Map supabase os_users row → OSUser shape used throughout the app
+function mapDbUser(row: Record<string, unknown>): OSUser {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    email: row.email as string,
+    role: row.role as UserRole,
+    title: (row.title as string) ?? '',
+    avatar: (row.avatar_url as string) ?? '',
+    status: (row.status as 'active' | 'limited' | 'ooo' | 'blacklisted') ?? 'active',
+    isOnboarded: (row.is_onboarded as boolean) ?? false,
+    skills: (row.skills as string[]) ?? [],
+    joinedAt: (row.joined_at as string) ?? new Date().toISOString(),
+    reliabilityScore: (row.reliability_score as number) ?? 100,
+    nudgeCount: (row.nudge_count as number) ?? 0,
+    currentLoad: (row.current_load as number) ?? 0,
+    company: (row.company as string) ?? '',
+    timezone: (row.timezone as string) ?? 'America/Toronto',
+    serviceSubscriptions: (row.service_subscriptions as unknown as import('@/lib/types').ServiceSubscription[]) ?? [],
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<OSUser | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true); // true on mount until session check
   const [impersonating, setImpersonating] = useState<UserRole | null>(null);
   const [impersonatingUserId, setImpersonatingUserId] = useState<string | null>(null);
 
-  const detectEmailDomain = useCallback((email: string) => {
-    const role = EMAIL_ROLE_MAP[email.toLowerCase()] ?? null;
-    return { role, isAdmin: role === 'admin' };
+  // ─── Restore session on mount ──────────────────────────────────────────────
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadSession() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user && mounted) {
+        const { data } = await supabase
+          .from('os_users')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+        if (data && mounted) setUser(mapDbUser(data));
+      }
+      if (mounted) setIsLoading(false);
+    }
+
+    loadSession();
+
+    // Listen for auth state changes (sign in, sign out, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setImpersonating(null);
+        setImpersonatingUserId(null);
+        return;
+      }
+      if (session?.user) {
+        const { data } = await supabase
+          .from('os_users')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+        if (data) setUser(mapDbUser(data));
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
-  const login = useCallback(async (email: string, _password: string) => {
+  // ─── Login ─────────────────────────────────────────────────────────────────
+  const login = useCallback(async (email: string, password: string) => {
     setIsLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
-    // Simulate network delay
-    await new Promise((r) => setTimeout(r, 900));
+      if (error || !data.user) {
+        setIsLoading(false);
+        return {
+          success: false,
+          redirectTo: '/login',
+          error: error?.message ?? 'Authentication failed.',
+        };
+      }
 
-    const foundUser = mockUsers.find((u) => u.email.toLowerCase() === email.toLowerCase());
+      // Fetch profile from os_users
+      const { data: profile, error: profileError } = await supabase
+        .from('os_users')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
 
-    if (!foundUser) {
+      if (profileError || !profile) {
+        // User exists in auth but not in os_users yet — redirect to onboard
+        setIsLoading(false);
+        return { success: true, redirectTo: '/onboard' };
+      }
+
+      const osUser = mapDbUser(profile);
+      setUser(osUser);
       setIsLoading(false);
-      return { success: false, redirectTo: '/login', error: 'No account found for this email address.' };
-    }
 
-    // Check onboarding gate
-    if (!foundUser.isOnboarded) {
-      setUser(foundUser);
+      if (!osUser.isOnboarded) return { success: true, redirectTo: '/onboard' };
+      return { success: true, redirectTo: ROLE_REDIRECTS[osUser.role] };
+    } catch {
       setIsLoading(false);
-      return { success: true, redirectTo: '/onboard' };
+      return { success: false, redirectTo: '/login', error: 'Unexpected error. Please try again.' };
     }
-
-    setUser(foundUser);
-    setIsLoading(false);
-
-    const redirectTo = ROLE_REDIRECTS[foundUser.role];
-    return { success: true, redirectTo };
   }, []);
 
-  const logout = useCallback(() => {
+  // ─── Logout ────────────────────────────────────────────────────────────────
+  const logout = useCallback(async () => {
+    await supabase.auth.signOut();
     setUser(null);
     setImpersonating(null);
+    setImpersonatingUserId(null);
   }, []);
 
+  // ─── Impersonation (admin-only) ────────────────────────────────────────────
   const startImpersonation = useCallback((role: UserRole, userId?: string) => {
     setImpersonating(role);
-    // If no specific userId provided, pick the first user with that role
-    const targetUser = userId
-      ? mockUsers.find(u => u.id === userId)
-      : mockUsers.find(u => u.role === role);
-    setImpersonatingUserId(targetUser?.id ?? null);
+    setImpersonatingUserId(userId ?? null);
   }, []);
 
   const stopImpersonation = useCallback(() => {
     setImpersonating(null);
     setImpersonatingUserId(null);
+  }, []);
+
+  // ─── Email domain sniff (UI hint on login page) ────────────────────────────
+  const detectEmailDomain = useCallback((email: string) => {
+    const domain = email.split('@')[1]?.toLowerCase() ?? '';
+    const isAdmin = domain === 'zennstudios.com' || domain === 'zennstudios.ca';
+    // We can't know the role from domain alone with real auth, but keep the UX hint
+    const role: UserRole | null = isAdmin ? 'admin' : null;
+    return { role, isAdmin };
   }, []);
 
   return (

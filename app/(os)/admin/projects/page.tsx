@@ -1,19 +1,19 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus, Search, MoreVertical, CheckCircle, Clock, AlertTriangle, Lock,
   ArrowRight, Users, DollarSign, Calendar, Trash2, Edit3, Archive,
   ExternalLink, ChevronRight, Play, ChevronDown, X, UserCheck, FileSignature,
-  GripVertical, LayoutGrid, List, LayoutList
+  GripVertical, LayoutGrid, List, LayoutList, Loader2
 } from 'lucide-react';
 
-import { useStore } from '@/lib/store';
+import { supabase } from '@/lib/supabase/client';
+import { dbAddProject, dbUpdateProject, dbDeleteProject, dbAddMilestone, dbUpdateMilestone } from '@/lib/supabase/db';
 import Link from 'next/link';
 import type { Project, Milestone, MilestoneStatus, ProjectStatus } from '@/lib/types';
-import { mockUsers } from '@/lib/mock-data';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -57,17 +57,15 @@ function generateMilestoneId() { return `ms_${Date.now().toString(36)}_${Math.ra
 // ─── Milestone Row (in detail panel) ─────────────────────────────────────────
 
 function MilestoneRow({ milestone, projectId, onAdvance }: { milestone: Milestone; projectId: string; onAdvance?: (id: string) => void }) {
-  const { updateMilestone } = useStore();
   const [busy, setBusy] = useState(false);
   const cfg = MILESTONE_CFG[milestone.status];
   const StatusIcon = cfg.icon;
-  const assignedUsers = milestone.assignedTo.map(id => mockUsers.find(u => u.id === id)).filter(Boolean);
 
   const advance = async () => {
     const next = NEXT_STATUS[milestone.status];
     if (next === 'approved' && milestone.status === 'approved') return;
     setBusy(true);
-    await updateMilestone(projectId, milestone.id, {
+    await dbUpdateMilestone(milestone.id, {
       status: next,
       progress: next === 'approved' ? 100 : milestone.progress,
     });
@@ -92,9 +90,9 @@ function MilestoneRow({ milestone, projectId, onAdvance }: { milestone: Mileston
         <p className="text-[9px] text-[#444] text-right mt-0.5">{milestone.progress}%</p>
       </div>
       <div className="flex -space-x-1.5">
-        {assignedUsers.slice(0, 3).map(u => (
-          <div key={u!.id} title={u!.name} className="w-5 h-5 rounded-full bg-[#1a1a1a] border border-[rgba(255,255,255,0.1)] flex items-center justify-center text-[8px] font-bold text-[#888]">
-            {u!.name.charAt(0)}
+        {(milestone.assignedTo ?? []).slice(0, 3).map((uid: string) => (
+          <div key={uid} title={uid} className="w-5 h-5 rounded-full bg-[#1a1a1a] border border-[rgba(255,255,255,0.1)] flex items-center justify-center text-[8px] font-bold text-[#888]">
+            {uid.charAt(0).toUpperCase()}
           </div>
         ))}
       </div>
@@ -121,7 +119,7 @@ interface DraftMilestone {
 
 const STEPS = ['Basics', 'Milestones', 'Team', 'Contracts'];
 
-function NewProjectModal({ onClose, onSave }: { onClose: () => void; onSave: (p: Omit<Project, 'id'>) => Promise<Project> }) {
+function NewProjectModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
@@ -139,7 +137,7 @@ function NewProjectModal({ onClose, onSave }: { onClose: () => void; onSave: (p:
   const [team, setTeam] = useState<string[]>(['usr_admin_01']);
   const [selectedContracts, setSelectedContracts] = useState<string[]>([]);
 
-  const teamOptions = mockUsers.filter(u => u.role !== 'client');
+  const teamOptions: { id: string; name: string; title?: string; current_load?: number }[] = [];
 
   const addMilestone = () => {
     setMilestones(ms => [...ms, {
@@ -160,33 +158,45 @@ function NewProjectModal({ onClose, onSave }: { onClose: () => void; onSave: (p:
   const handleSave = async () => {
     if (!basics.name || !basics.clientName) return;
     setBusy(true);
-    const builtMilestones: Milestone[] = milestones
-      .filter(m => m.name.trim())
-      .map((m, i) => ({
-        id: m.id,
-        name: m.name,
-        status: i === 0 ? 'unlocked' : 'locked' as MilestoneStatus,
-        assignedTo: m.assignedTo,
-        startDate: basics.startDate,
-        endDate: m.endDate || basics.endDate,
-        progress: 0,
-        isClientVisible: m.isClientVisible,
-        dependencies: i > 0 ? [milestones[i - 1].id] : [],
-        payout: m.payout ? Number(m.payout) : undefined,
-      }));
+    try {
+      // 1. Create the project
+      const project = await dbAddProject({
+        name: basics.name,
+        client_name: basics.clientName,
+        type: basics.type,
+        total_value: basics.totalValue,
+        start_date: basics.startDate,
+        end_date: basics.endDate,
+        brief: basics.brief,
+        status: 'active',
+        health_status: 'green',
+        completion_percent: 0,
+        paid_to_date: 0,
+      });
 
-    await onSave({
-      ...basics,
-      status: 'active',
-      paidToDate: 0,
-      healthStatus: 'green',
-      completionPercent: 0,
-      assignedTeam: team,
-      milestones: builtMilestones,
-      tags: [],
-    });
-    setDone(true);
-    setTimeout(onClose, 900);
+      // 2. Create milestones
+      for (let i = 0; i < milestones.length; i++) {
+        const m = milestones[i];
+        if (!m.name.trim()) continue;
+        await dbAddMilestone({
+          project_id: project.id,
+          name: m.name,
+          status: i === 0 ? 'unlocked' : 'locked',
+          end_date: m.endDate || basics.endDate,
+          progress: 0,
+          is_client_visible: m.isClientVisible,
+          payout: m.payout ? Number(m.payout) : null,
+        });
+      }
+
+      setDone(true);
+      setTimeout(onClose, 900);
+    } catch (err) {
+      console.error('Project create error:', err);
+      alert('Failed to create project. Check console.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const canProceed = [
@@ -354,9 +364,9 @@ function NewProjectModal({ onClose, onSave }: { onClose: () => void; onSave: (p:
                             <p className="text-xs font-bold text-[#eee] truncate">{u.name}</p>
                             <p className="text-[10px] text-[#444] truncate">{u.title}</p>
                           </div>
-                          {u.currentLoad !== undefined && (
-                            <span className={`text-[9px] px-2 py-0.5 rounded-full border ${u.currentLoad > 4 ? 'text-[#f59e0b] border-[rgba(245,158,11,0.3)]' : 'text-[#10b981] border-[rgba(16,185,129,0.3)]'}`}>
-                              {u.currentLoad} proj
+                          {u.current_load !== undefined && (
+                            <span className={`text-[9px] px-2 py-0.5 rounded-full border ${u.current_load > 4 ? 'text-[#f59e0b] border-[rgba(245,158,11,0.3)]' : 'text-[#10b981] border-[rgba(16,185,129,0.3)]'}`}>
+                              {u.current_load} proj
                             </span>
                           )}
                           <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all ${isSelected ? 'border-[#b6332e] bg-[#b6332e]' : 'border-[#333]'}`}>
@@ -436,21 +446,23 @@ function NewProjectModal({ onClose, onSave }: { onClose: () => void; onSave: (p:
 
 // ─── Project Card ─────────────────────────────────────────────────────────────
 
-function ProjectCard({ project, onOpen }: { project: Project; onOpen: (p: Project) => void }) {
-  const { updateProject, deleteProject } = useStore();
+function ProjectCard({ project, onOpen, onRefresh }: { project: Project; onOpen: (p: Project) => void; onRefresh: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const health = HEALTH_CONFIG[project.healthStatus];
-  const teamMembers = project.assignedTeam.map(id => mockUsers.find(u => u.id === id)).filter(Boolean);
+  const health = HEALTH_CONFIG[project.healthStatus ?? 'green'];
 
   const handleAction = async (action: 'hold' | 'archive' | 'delete' | 'complete') => {
     setMenuOpen(false);
     setBusy(true);
-    if (action === 'delete') await deleteProject(project.id);
-    else if (action === 'complete') await updateProject(project.id, { status: 'completed', completionPercent: 100 });
-    else if (action === 'hold') await updateProject(project.id, { status: project.status === 'on_hold' ? 'active' : 'on_hold' });
-    else if (action === 'archive') await updateProject(project.id, { status: 'archived' });
-    setBusy(false);
+    try {
+      if (action === 'delete') await dbDeleteProject(project.id);
+      else if (action === 'complete') await dbUpdateProject(project.id, { status: 'completed', completion_percent: 100 });
+      else if (action === 'hold') await dbUpdateProject(project.id, { status: project.status === 'on_hold' ? 'active' : 'on_hold' });
+      else if (action === 'archive') await dbUpdateProject(project.id, { status: 'archived' });
+      onRefresh();
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -462,10 +474,10 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: (p: Projec
             <span style={{ background: health.bg, color: health.color }} className="text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
               {health.label}
             </span>
-            <span className="text-[9px] text-[#444] uppercase">{STATUS_LABELS[project.status]}</span>
+            <span className="text-[9px] text-[#444] uppercase">{STATUS_LABELS[project.status ?? 'active']}</span>
           </div>
           <h3 className="text-sm font-bold text-[#eee] truncate">{project.name}</h3>
-          <p className="text-xs text-[#555] mt-0.5">{project.clientName} · {project.type.replace('_', ' ').toUpperCase()}</p>
+          <p className="text-xs text-[#555] mt-0.5">{project.clientName} · {(project.type ?? '').replace('_', ' ').toUpperCase()}</p>
         </div>
         <div className="relative">
           <button onClick={() => setMenuOpen(m => !m)} className="w-7 h-7 rounded-lg flex items-center justify-center text-[#444] hover:text-[#eee] hover:bg-[rgba(255,255,255,0.06)] transition-colors">
@@ -521,9 +533,9 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: (p: Projec
 
       <div className="flex items-center justify-between">
         <div className="flex -space-x-2">
-          {teamMembers.slice(0, 4).map(u => (
-            <div key={u!.id} title={u!.name} className="w-6 h-6 rounded-full bg-[#1a1a1a] border border-[rgba(255,255,255,0.1)] flex items-center justify-center text-[9px] font-bold text-[#888]">
-              {u!.name.charAt(0)}
+          {(project.assignedTeam ?? []).slice(0, 4).map((uid: string) => (
+            <div key={uid} title={uid} className="w-6 h-6 rounded-full bg-[#1a1a1a] border border-[rgba(255,255,255,0.1)] flex items-center justify-center text-[9px] font-bold text-[#888]">
+              {uid.charAt(0).toUpperCase()}
             </div>
           ))}
         </div>
@@ -537,43 +549,41 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: (p: Projec
 
 // ─── Project Detail Panel ─────────────────────────────────────────────────────
 
-function ProjectDetailPanel({ project, onClose }: { project: Project; onClose: () => void }) {
-  const { updateProject } = useStore();
+function ProjectDetailPanel({ project, onClose, onRefresh }: { project: Project; onClose: () => void; onRefresh?: () => void }) {
   const [editingHealth, setEditingHealth] = useState(false);
   const [editingPaid, setEditingPaid] = useState(false);
   const [tempPaid, setTempPaid] = useState(String(project.paidToDate));
   const [addingMilestone, setAddingMilestone] = useState(false);
   const [newMs, setNewMs] = useState({ name: '', endDate: '', payout: '' });
 
-  const current = project; // always fresh from store
+  const current = project;
 
-  const handleHealthChange = async (h: Project['healthStatus']) => {
-    await updateProject(project.id, { healthStatus: h });
+  const handleHealthChange = async (h: string) => {
+    await dbUpdateProject(project.id, { health_status: h });
     setEditingHealth(false);
+    onRefresh?.();
   };
 
   const savePaid = async () => {
-    await updateProject(project.id, { paidToDate: Number(tempPaid) });
+    await dbUpdateProject(project.id, { paid_to_date: Number(tempPaid) });
     setEditingPaid(false);
+    onRefresh?.();
   };
 
   const addMilestone = async () => {
     if (!newMs.name) return;
-    const ms: Milestone = {
-      id: generateMilestoneId(),
+    await dbAddMilestone({
+      project_id: project.id,
       name: newMs.name,
       status: 'locked',
-      assignedTo: [project.assignedTeam[0]],
-      startDate: new Date().toISOString().split('T')[0],
-      endDate: newMs.endDate || project.endDate,
+      end_date: newMs.endDate || project.endDate,
       progress: 0,
-      isClientVisible: true,
-      dependencies: project.milestones.length > 0 ? [project.milestones[project.milestones.length - 1].id] : [],
-      payout: newMs.payout ? Number(newMs.payout) : undefined,
-    };
-    await updateProject(project.id, { milestones: [...project.milestones, ms] });
+      is_client_visible: true,
+      payout: newMs.payout ? Number(newMs.payout) : null,
+    });
     setNewMs({ name: '', endDate: '', payout: '' });
     setAddingMilestone(false);
+    onRefresh?.();
   };
 
   return (
@@ -680,20 +690,14 @@ function ProjectDetailPanel({ project, onClose }: { project: Project; onClose: (
         <div>
           <p className="section-label mb-2">Team ({current.assignedTeam.length})</p>
           <div className="space-y-2">
-            {current.assignedTeam.map(uid => {
-              const u = mockUsers.find(u => u.id === uid);
-              if (!u) return null;
-              return (
-                <div key={uid} className="flex items-center gap-3 p-2 rounded-lg hover:bg-[#111] transition-colors">
-                  <div className="w-7 h-7 rounded-full bg-[#1a1a1a] border border-[rgba(255,255,255,0.08)] flex items-center justify-center text-[10px] font-bold text-[#888]">{u.name.charAt(0)}</div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-[#ccc] truncate">{u.name}</p>
-                    <p className="text-[9px] text-[#444]">{u.title}</p>
-                  </div>
-                  <span className="text-[9px] text-[#333] capitalize">{u.role}</span>
+            {(current.assignedTeam ?? []).map((uid: string) => (
+              <div key={uid} className="flex items-center gap-3 p-2 rounded-lg hover:bg-[#111] transition-colors">
+                <div className="w-7 h-7 rounded-full bg-[#1a1a1a] border border-[rgba(255,255,255,0.08)] flex items-center justify-center text-[10px] font-bold text-[#888]">{uid.charAt(0).toUpperCase()}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold text-[#ccc] truncate">{uid}</p>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         </div>
 
@@ -832,12 +836,59 @@ function TimelineView({ projects, onOpen }: { projects: Project[]; onOpen: (p: P
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ProjectManagement() {
-  const { projects, addProject } = useStore();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('all');
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [showNewModal, setShowNewModal] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'timeline'>('grid');
+
+  const loadProjects = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('os_projects')
+      .select('*, os_milestones(*)')
+      .order('created_at', { ascending: false });
+    if (!error && data) {
+      // Remap snake_case columns to what the UI expects
+      const mapped: Project[] = data.map((p: Record<string, unknown>) => ({
+        ...p,
+        id: p.id as string,
+        name: p.name as string,
+        clientName: (p.client_name ?? p.name) as string,
+        client_name: p.client_name as string,
+        type: (p.type ?? 'web') as string,
+        totalValue: Number(p.total_value ?? 0),
+        paidToDate: Number(p.paid_to_date ?? 0),
+        healthStatus: (p.health_status ?? 'green') as string,
+        completionPercent: Number(p.completion_percent ?? 0),
+        startDate: p.start_date as string,
+        endDate: p.end_date as string,
+        status: (p.status ?? 'active') as ProjectStatus,
+        assignedTeam: (p.assigned_team ?? []) as string[],
+        milestones: ((p.os_milestones ?? []) as Record<string, unknown>[]).map((m) => ({
+          ...m,
+          id: m.id as string,
+          name: m.name as string,
+          status: (m.status ?? 'locked') as MilestoneStatus,
+          progress: Number(m.progress ?? 0),
+          assignedTo: (m.assigned_to ?? []) as string[],
+          endDate: m.end_date as string,
+          startDate: m.start_date as string,
+          payout: m.payout ? Number(m.payout) : undefined,
+          isClientVisible: m.is_client_visible as boolean,
+          dependencies: (m.dependencies ?? []) as string[],
+        })),
+        tags: (p.tags ?? []) as string[],
+      })) as unknown as Project[];
+      setProjects(mapped);
+    }
+    setLoading(false);
+  }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadProjects(); }, []);
 
   const filtered = projects.filter(p => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase()) || p.clientName.toLowerCase().includes(search.toLowerCase());
@@ -847,8 +898,8 @@ export default function ProjectManagement() {
 
   const summary = {
     active: projects.filter(p => p.status === 'active').length,
-    revenue: projects.filter(p => p.status === 'active').reduce((s, p) => s + p.totalValue, 0),
-    collected: projects.reduce((s, p) => s + p.paidToDate, 0),
+    revenue: projects.filter(p => p.status === 'active').reduce((s, p) => s + (p.totalValue ?? 0), 0),
+    collected: projects.reduce((s, p) => s + (p.paidToDate ?? 0), 0),
     atRisk: projects.filter(p => p.healthStatus !== 'green' && p.status === 'active').length,
   };
 
@@ -863,7 +914,9 @@ export default function ProjectManagement() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-[#eee]">Project Management</h1>
-          <p className="text-xs text-[#555] mt-0.5">{summary.active} active · {projects.length} total</p>
+          <p className="text-xs text-[#555] mt-0.5">
+            {loading ? 'Loading...' : `${summary.active} active · ${projects.length} total`}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {/* View toggle */}
@@ -919,7 +972,11 @@ export default function ProjectManagement() {
       ) : (
         <div className={selectedProject ? 'grid grid-cols-1 lg:grid-cols-3 gap-6' : ''}>
           <div className={selectedProject ? 'lg:col-span-2' : ''}>
-            {filtered.length === 0 ? (
+            {loading ? (
+            <div className="py-20 flex items-center justify-center text-[#444]">
+              <Loader2 className="w-6 h-6 animate-spin mr-2" /> Loading projects...
+            </div>
+          ) : filtered.length === 0 ? (
               <div className="glass-panel rounded-2xl p-12 text-center">
                 <p className="text-[#555] text-sm mb-3">No projects found.</p>
                 <button onClick={() => setShowNewModal(true)} className="btn-primary text-xs mx-auto"><Plus className="w-3 h-3" /> Create First Project</button>
@@ -928,7 +985,7 @@ export default function ProjectManagement() {
               <motion.div layout className={`grid gap-4 ${selectedProject ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'}`}>
                 <AnimatePresence mode="popLayout">
                   {filtered.map(p => (
-                    <ProjectCard key={p.id} project={p} onOpen={proj => setSelectedProject(selectedProject?.id === proj.id ? null : proj)} />
+                    <ProjectCard key={p.id} project={p} onRefresh={loadProjects} onOpen={proj => setSelectedProject(selectedProject?.id === proj.id ? null : proj)} />
                   ))}
                 </AnimatePresence>
               </motion.div>
@@ -974,6 +1031,7 @@ export default function ProjectManagement() {
               <ProjectDetailPanel
                 project={projects.find(p => p.id === selectedProject.id) ?? selectedProject}
                 onClose={() => setSelectedProject(null)}
+                onRefresh={loadProjects}
               />
             )}
           </AnimatePresence>
@@ -981,7 +1039,7 @@ export default function ProjectManagement() {
       )}
 
       <AnimatePresence>
-        {showNewModal && <NewProjectModal onClose={() => setShowNewModal(false)} onSave={addProject} />}
+        {showNewModal && <NewProjectModal onClose={() => setShowNewModal(false)} onSaved={loadProjects} />}
       </AnimatePresence>
     </div>
   );

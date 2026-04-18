@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/contexts/AuthContext';
-import { AppStoreProvider } from '@/lib/store';
+import { QueryProvider } from '@/providers/QueryProvider';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 
@@ -19,12 +19,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${inter.variable} dark`}>
       <body className="antialiased bg-black text-[#eeeeee] min-h-screen">
-        <AppStoreProvider>
+        <QueryProvider>
           <AuthProvider>
             {children}
           </AuthProvider>
-        </AppStoreProvider>
+        </QueryProvider>
       </body>
     </html>
   );
 }
+

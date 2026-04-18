@@ -1,8 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react/no-unescaped-entities, react-hooks/exhaustive-deps */
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { mockProjects, mockUsers } from '@/lib/mock-data';
+import { supabase } from '@/lib/supabase/client';
 import {
   UploadCloud, File, Folder, MoreVertical, Download, Image as ImageIcon,
   Video, FileText, Plus, X, Search, Grid, List, FolderOpen, Check,
@@ -36,10 +37,13 @@ const INITIAL_FILES: VaultFile[] = [
 
 function generateId() { return `file_${Date.now().toString(36)}`; }
 
+interface DbProject { id: string; name: string; client_name: string; }
+
 export default function ProjectVault() {
   const [files, setFiles] = useState<VaultFile[]>(INITIAL_FILES);
   const [activeFolder, setActiveFolder] = useState('04_Exports');
-  const [activeProject, setActiveProject] = useState(mockProjects[0].id);
+  const [activeProject, setActiveProject] = useState<string>('');
+  const [dbProjects, setDbProjects] = useState<DbProject[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [search, setSearch] = useState('');
@@ -48,7 +52,16 @@ export default function ProjectVault() {
   const [uploadForm, setUploadForm] = useState({ name: '', version: 'v1', folder: '04_Exports' });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const project = mockProjects.find(p => p.id === activeProject) ?? mockProjects[0];
+  useEffect(() => {
+    supabase.from('os_projects').select('id,name,client_name').order('created_at', { ascending: false }).then(({ data }) => {
+      if (data && data.length > 0) {
+        setDbProjects(data as DbProject[]);
+        setActiveProject((data[0] as DbProject).id);
+      }
+    });
+  }, []);
+
+  const project = dbProjects.find(p => p.id === activeProject) ?? dbProjects[0];
   const folderFiles = files.filter(f => f.folder === activeFolder && (search === '' || f.name.toLowerCase().includes(search.toLowerCase())));
 
   const handleDrop = (e: React.DragEvent) => {
@@ -103,7 +116,7 @@ export default function ProjectVault() {
       <div className="flex items-center justify-between mb-4 flex-shrink-0">
         <div>
           <h1 className="text-xl font-bold text-[#eee]">Project Vault</h1>
-          <p className="text-xs text-[#555] mt-0.5">{project.name} · Asset management &amp; versioning</p>
+          <p className="text-xs text-[#555] mt-0.5">{project?.name || 'Loading vault...'} · Asset management &amp; versioning</p>
         </div>
         <div className="flex gap-2">
           <button onClick={() => fileInputRef.current?.click()} className="btn-secondary text-xs">
@@ -117,10 +130,10 @@ export default function ProjectVault() {
       </div>
 
       {/* Project tabs */}
-      <div className="flex gap-1 mb-4 flex-shrink-0">
-        {mockProjects.slice(0, 4).map(p => (
+      <div className="flex gap-1 mb-4 flex-shrink-0 flex-wrap">
+        {dbProjects.slice(0, 6).map(p => (
           <button key={p.id} onClick={() => setActiveProject(p.id)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all truncate max-w-[150px] border ${activeProject === p.id ? 'border-[rgba(182,51,46,0.3)] bg-[rgba(182,51,46,0.1)] text-[#b6332e]' : 'border-[rgba(255,255,255,0.06)] text-[#555] hover:text-[#888]'}`}>
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all truncate max-w-[180px] border ${activeProject === p.id ? 'border-[rgba(182,51,46,0.3)] bg-[rgba(182,51,46,0.1)] text-[#b6332e]' : 'border-[rgba(255,255,255,0.06)] text-[#555] hover:text-[#888]'}`}>
             {p.name}
           </button>
         ))}

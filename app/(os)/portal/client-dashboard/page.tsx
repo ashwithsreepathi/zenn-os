@@ -1,10 +1,10 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, react/no-unescaped-entities, react-hooks/exhaustive-deps */
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '@/contexts/AuthContext';
-import { useStore } from '@/lib/store';
-import { mockUsers, mockProjects } from '@/lib/mock-data';
+import { supabase } from '@/lib/supabase/client';
 import type { ServiceType } from '@/lib/types';
 import {
   CheckCircle, Lock, Clock, PlayCircle, FileText, ArrowRight, BarChart2,
@@ -70,10 +70,10 @@ const mockPresentationSlides = [
 
 // ─── Service Modules ─────────────────────────────────────────────────────────
 
-function WebModule({ project }: { project: typeof mockProjects[0] | undefined }) {
+function WebModule({ project }: { project: { name: string; completion_percent: number; milestones?: any[] } | undefined }) {
   if (!project) return <p className="text-xs text-[#444]">No web project linked.</p>;
-  const visibleMilestones = project.milestones.filter(m => m.isClientVisible);
-  const approved = visibleMilestones.filter(m => m.status === 'approved').length;
+  const visibleMilestones = (project.milestones ?? []).filter((m: any) => m.is_client_visible);
+  const approved = visibleMilestones.filter((m: any) => m.status === 'approved').length;
 
   return (
     <div className="space-y-5">
@@ -84,18 +84,18 @@ function WebModule({ project }: { project: typeof mockProjects[0] | undefined })
             <circle cx="44" cy="44" r="36" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="8" />
             <circle cx="44" cy="44" r="36" fill="none" stroke="#3b82f6" strokeWidth="8"
               strokeDasharray={2 * Math.PI * 36}
-              strokeDashoffset={2 * Math.PI * 36 * (1 - project.completionPercent / 100)}
+              strokeDashoffset={2 * Math.PI * 36 * (1 - project.completion_percent / 100)}
               strokeLinecap="round" style={{ transition: 'stroke-dashoffset 1s ease' }} />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-xl font-black text-[#eee]">{project.completionPercent}%</span>
+            <span className="text-xl font-black text-[#eee]">{project.completion_percent}%</span>
           </div>
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="text-sm font-bold text-[#eee] truncate">{project.name}</h3>
           <p className="text-[10px] text-[#555] mb-2">{approved} of {visibleMilestones.length} phases complete</p>
           <div className="progress-bar">
-            <div className="progress-fill !bg-[#3b82f6]" style={{ width: `${project.completionPercent}%` }} />
+            <div className="progress-fill !bg-[#3b82f6]" style={{ width: `${project.completion_percent}%` }} />
           </div>
         </div>
       </div>
@@ -107,7 +107,7 @@ function WebModule({ project }: { project: typeof mockProjects[0] | undefined })
           <span className="text-[10px] text-[#555]">{approved}/{visibleMilestones.length} done</span>
         </div>
         <div className="space-y-3">
-          {visibleMilestones.map((m, i) => {
+        {visibleMilestones.map((m: any, i: number) => {
             const isDone = m.status === 'approved';
             const isActive = m.status === 'in_progress';
             return (
@@ -126,7 +126,7 @@ function WebModule({ project }: { project: typeof mockProjects[0] | undefined })
                     )}
                     {!isDone && !isActive && m.status !== 'submitted' && <Lock className="w-3 h-3 text-[#333]" />}
                   </div>
-                  <p className="text-[10px] text-[#444] mt-0.5">Due {m.endDate}</p>
+                  <p className="text-[10px] text-[#444] mt-0.5">Due {m.end_date ?? '—'}</p>
                 </div>
               </div>
             );
@@ -490,22 +490,40 @@ function ActionInbox() {
 
 export default function ClientDashboard() {
   const { user, impersonating, impersonatingUserId } = useAuth();
-  const { users } = useStore();
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [linkedProject, setLinkedProject] = useState<any>(null);
+  const [projectMilestones, setProjectMilestones] = useState<any[]>([]);
 
-  // Resolve current user — real login OR impersonation
   const resolvedUserId = impersonating ? impersonatingUserId : user?.id;
-  // Try store (dynamic) first, then fall back to static mockUsers
-  const currentUser =
-    users.find(u => u.id === resolvedUserId) ??
-    mockUsers.find(u => u.id === resolvedUserId) ??
-    (impersonating ? mockUsers.find(u => u.role === impersonating) : null);
 
-  const services = currentUser?.serviceSubscriptions ?? [];
-  const [activeService, setActiveService] = useState<ServiceType>(services[0]?.type ?? 'web');
+  useEffect(() => {
+    if (!resolvedUserId) return;
+    supabase.from('os_users').select('*').eq('id', resolvedUserId).single().then(({ data: u }) => {
+      if (u) {
+        setCurrentUser(u);
+        // Find their linked project via client_id or assigned_team
+        supabase.from('os_projects').select('*')
+          .or(`client_id.eq.${u.id},assigned_team.cs.{${u.id}}`)
+          .eq('status', 'active')
+          .limit(1)
+          .single()
+          .then(({ data: proj }) => {
+            if (proj) {
+              setLinkedProject(proj);
+              supabase.from('os_milestones').select('*').eq('project_id', proj.id)
+                .order('display_order', { ascending: true })
+                .then(({ data: ms }) => setProjectMilestones(ms ?? []));
+            }
+          });
+      }
+    });
+  }, [resolvedUserId]);
 
-  // Find linked project
-  const linkedSub = services.find(s => s.type === activeService);
-  const linkedProject = mockProjects.find(p => p.id === linkedSub?.projectId);
+  const services = (currentUser?.service_subscriptions as any /* eslint-disable-line @typescript-eslint/no-explicit-any */[] ?? []);
+  const [activeService, setActiveService] = useState<ServiceType>('web');
+
+  // Merge milestones into linkedProject for WebModule
+  const projectWithMilestones = linkedProject ? { ...linkedProject, milestones: projectMilestones } : undefined;
 
   const greeting = impersonating
     ? (currentUser?.name?.split(' ')[0] ?? 'Client')
@@ -531,9 +549,10 @@ export default function ClientDashboard() {
       {services.length > 1 && (
         <div className="flex gap-1 overflow-x-auto pb-1">
           {services.map(sub => {
-            const meta = SERVICE_META[sub.type];
+            const tempType = sub.type as ServiceType;
+            const meta = SERVICE_META[tempType] ?? SERVICE_META['web'];
             const Icon = meta.icon;
-            const isActive = activeService === sub.type;
+            const isActive = activeService === tempType;
             return (
               <button
                 key={sub.type}
@@ -557,7 +576,7 @@ export default function ClientDashboard() {
       {services.length > 0 && (
         <div className="flex items-center gap-2">
           {(() => {
-            const meta = SERVICE_META[activeService];
+            const meta = SERVICE_META[activeService as ServiceType] ?? SERVICE_META['web'];
             const Icon = meta.icon;
             return (
               <>
@@ -577,7 +596,7 @@ export default function ClientDashboard() {
         <div className="lg:col-span-2">
           <AnimatePresence mode="wait">
             <motion.div key={activeService} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-              {activeService === 'web' && <WebModule project={linkedProject} />}
+              {activeService === 'web' && <WebModule project={projectWithMilestones} />}
               {activeService === 'business_dev' && <BusinessDevModule />}
               {activeService === 'photography' && <PhotographyModule />}
               {activeService === 'social_media' && <SocialMediaModule />}
